@@ -21,80 +21,113 @@ class DelhiHighCourtScraper:
         Fetch the judgments listing page and extract judgment entries.
         Returns a list of dictionaries with keys: title, date, case_number, pdf_url, raw_text
         """
-        try:
-            logger.info(f"Fetching judgments from: {listing_url}")
-            response = self.session.get(listing_url, timeout=30)
-            response.raise_for_status()
+        urls_to_try = [listing_url]
+        fallbacks = [
+            "https://delhihighcourt.nic.in/web/judgement/fetch-data",
+            "https://delhihighcourt.nic.in"
+        ]
+        for fb in fallbacks:
+            if fb not in urls_to_try:
+                urls_to_try.append(fb)
 
-            soup = BeautifulSoup(response.content, 'html.parser')
+        for target_url in urls_to_try:
+            try:
+                logger.info(f"Fetching judgments from: {target_url}")
+                response = self.session.get(target_url, timeout=30)
+                if response.status_code != 200:
+                    logger.warning(f"HTTP {response.status_code} from {target_url}, trying next fallback...")
+                    continue
 
-            # Try to find judgment entries - adjust these selectors based on actual site structure
-            # Common patterns for judgment listings on court websites
-            selectors = [
-                'tr',  # Table rows
-                '.judgment-item',
-                '.cause-list-item',
-                '.judgment-row',
-                '.case-item',
-                'li',  # List items
-                '.entry'
-            ]
+                soup = BeautifulSoup(response.content, 'html.parser')
+                judgments = []
 
-            judgment_elements = []
-            for selector in selectors:
-                elements = soup.select(selector)
-                if elements:
-                    logger.info(f"Found {len(elements)} elements using selector: {selector}")
-                    judgment_elements = elements
-                    break
+                # Strategy 1: Check table rows (used by /web/judgement/fetch-data)
+                rows = soup.select('table tr')
+                for row in rows:
+                    judgment = self._parse_judgment_element(row)
+                    if judgment:
+                        judgments.append(judgment)
 
-            if not judgment_elements:
-                logger.warning("Could not find judgment elements with common selectors")
-                # Fallback: look for any links that might be judgments
-                judgment_elements = soup.find_all('a', href=True)
+                # Strategy 2: Check ticker & announcement list items (used by homepage)
+                if not judgments:
+                    ticker_items = soup.select('.latest-announc-ticker li, .latest-announc-area li, ul.announcements li, li')
+                    for item in ticker_items:
+                        judgment = self._parse_judgment_element(item)
+                        if judgment:
+                            judgments.append(judgment)
 
-            judgments = []
-            for element in judgment_elements:
-                judgment = self._parse_judgment_element(element)
-                if judgment:
-                    judgments.append(judgment)
+                # Strategy 3: Fallback to any PDF links
+                if not judgments:
+                    links = soup.find_all('a', href=True)
+                    for link in links:
+                        href = link.get('href', '')
+                        if 'showfilejudgment' in href.lower() or href.lower().endswith('.pdf'):
+                            judgment = self._parse_judgment_element(link)
+                            if judgment:
+                                judgments.append(judgment)
 
-            logger.info(f"Extracted {len(judgments)} judgment candidates")
-            return judgments
+                if judgments:
+                    logger.info(f"Successfully extracted {len(judgments)} judgment candidates from {target_url}")
+                    return judgments
+                else:
+                    logger.warning(f"No judgments found on {target_url}, trying next fallback...")
 
-        except Exception as e:
-            logger.error(f"Error fetching judgments listing: {e}")
-            return []
+            except Exception as e:
+                logger.error(f"Error fetching judgments listing from {target_url}: {e}")
+
+        return []
 
     def _parse_judgment_element(self, element) -> Optional[Dict]:
         """
-        Parse a single HTML element to extract judgment details.
+        Parse an HTML element (table row or list item) to extract judgment details.
         Returns a dictionary with judgment information or None if not a judgment.
         """
         try:
-            # Extract text content
+            # Check if this is a table row (tr) with standard Delhi High Court columns
+            tds = element.find_all('td')
+            if len(tds) >= 5:
+                # Column 1: Case No, Column 2: Judgment Date, Column 3: Petitioner, Column 4: Respondent, Column 5: Download
+                case_number = tds[1].get_text(strip=True)
+                date = tds[2].get_text(strip=True)
+                petitioner = tds[3].get_text(strip=True)
+                respondent = tds[4].get_text(strip=True)
+                title = f"{petitioner} Vs {respondent}" if petitioner and respondent else case_number
+
+                download_link = tds[5].find('a', href=True) if len(tds) > 5 else element.find('a', href=True)
+                pdf_url = urljoin(self.base_url, download_link['href']) if download_link else None
+
+                raw_text = f"{case_number} {title} {petitioner} {respondent} {date} judgment order"
+                return {
+                    'title': title,
+                    'date': date,
+                    'case_number': case_number,
+                    'pdf_url': pdf_url,
+                    'raw_text': raw_text,
+                    'element_html': str(element)[:500]
+                }
+
+            # General element (li, div, a)
             text = element.get_text(separator=' ', strip=True)
-            if not text or len(text) < 10:  # Too short to be a judgment
+            if not text or len(text) < 10:
                 return None
 
-            # Extract links
-            links = element.find_all('a', href=True)
+            links = element.find_all('a', href=True) if hasattr(element, 'find_all') else []
+            if element.name == 'a' and element.get('href'):
+                links = [element]
+
             pdf_url = None
             for link in links:
-                href = link['href']
-                # Look for PDF links or judgment links
-                if href.lower().endswith('.pdf') or 'judgment' in href.lower() or 'order' in href.lower():
+                href = link.get('href', '')
+                if href.lower().endswith('.pdf') or 'showfilejudgment' in href.lower() or 'judgment' in href.lower() or 'order' in href.lower():
                     pdf_url = urljoin(self.base_url, href)
                     break
 
-            # If no specific judgment link, take the first link
             if not pdf_url and links:
                 pdf_url = urljoin(self.base_url, links[0]['href'])
 
-            # Try to extract date using regex
+            # Date extraction regex
             date_patterns = [
-                r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}',  # DD/MM/YYYY or MM/DD/YYYY
-                r'\d{2,4}[/-]\d{1,2}[/-]\d{1,2}',  # YYYY/MM/DD
+                r'\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}',
                 r'\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{2,4}',
                 r'(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{2,4}'
             ]
@@ -105,11 +138,11 @@ class DelhiHighCourtScraper:
                     date = match.group(0)
                     break
 
-            # Try to extract case number (common patterns: WP(C) 123/2023, CS(OS) 456/2023)
+            # Case number extraction regex
             case_number_patterns = [
-                r'[A-Za-z]+\s*\d+/\d{4}',  # e.g., WP(C) 123/2023
-                r'\d+/\d{4}',               # e.g., 123/2023
-                r'[A-Za-z]+\(\s*[A-Za-z]+\s*\)\s*\d+/\d{4}'  # e.g., WP(C) 123/2023
+                r'[A-Za-z\.\(\)]+\s*-\s*\d+/\d{4}',
+                r'[A-Za-z\.\(\)\s]+\d+/\d{4}',
+                r'\d+/\d{4}'
             ]
             case_number = None
             for pattern in case_number_patterns:
@@ -118,16 +151,16 @@ class DelhiHighCourtScraper:
                     case_number = match.group(0).strip()
                     break
 
-            # If we couldn't extract structured data, use the whole text as title
-            title = text[:200]  # Limit title length
+            title = text[:250]
+            raw_text = f"{title} judgment order"
 
             return {
                 'title': title,
                 'date': date,
                 'case_number': case_number,
                 'pdf_url': pdf_url,
-                'raw_text': text,
-                'element_html': str(element)[:500]  # For debugging
+                'raw_text': raw_text,
+                'element_html': str(element)[:500]
             }
 
         except Exception as e:

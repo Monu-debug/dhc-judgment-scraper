@@ -27,8 +27,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuration
-# Default listing URL for Delhi High Court judgments - user may need to adjust
-DEFAULT_LISTING_URL = "https://delhihighcourt.nic.in/app/getjudgments"
+# Default listing URL for Delhi High Court judgments
+DEFAULT_LISTING_URL = "https://delhihighcourt.nic.in/web/judgement/fetch-data"
 # Time window for running (IST)
 RUN_START_TIME = time(16, 0)   # 4:00 PM
 RUN_END_TIME = time(16, 5)     # 4:05 PM
@@ -38,7 +38,10 @@ IST_OFFSET = timedelta(hours=5, minutes=30)
 # Default filtering keywords (can be extended via environment variables)
 DEFAULT_INCOME_TAX_KEYWORDS = [
     "income tax",
-    "ittat",
+    "income-tax",
+    "ita",
+    "itr",
+    "itat",
     "direct tax",
     "revenue",
     "tax",
@@ -47,12 +50,13 @@ DEFAULT_INCOME_TAX_KEYWORDS = [
     "appellate",
     "tribunal",
     "commissioner",
+    "commissioner of income tax",
     "addl.",
     "joint",
     "deputy",
     "assistant",
     "cit",
-    "cbd t",
+    "cbdt",
     "capital gains",
     "salary",
     "house property",
