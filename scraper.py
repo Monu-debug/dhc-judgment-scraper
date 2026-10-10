@@ -4,6 +4,7 @@ from typing import List, Dict, Optional
 import re
 from urllib.parse import urljoin, urlparse
 import logging
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,27 @@ class DelhiHighCourtScraper:
 
         return []
 
+    @staticmethod
+    def _parse_date_string(date_str: str):
+        """Parse date string into a date object"""
+        if not date_str:
+            return None
+        formats = [
+            '%d %b %Y',
+            '%d %B %Y',
+            '%d-%m-%Y',
+            '%d/%m/%Y',
+            '%d.%m.%Y',
+            '%Y-%m-%d'
+        ]
+        clean_str = re.sub(r'(\d+)(st|nd|rd|th)', r'\1', date_str.strip())
+        for fmt in formats:
+            try:
+                return datetime.strptime(clean_str, fmt).date()
+            except Exception:
+                continue
+        return None
+
     def _parse_judgment_element(self, element) -> Optional[Dict]:
         """
         Parse an HTML element (table row or list item) to extract judgment details.
@@ -97,9 +119,11 @@ class DelhiHighCourtScraper:
                 pdf_url = urljoin(self.base_url, download_link['href']) if download_link else None
 
                 raw_text = f"{case_number} {title} {petitioner} {respondent} {date} judgment order"
+                parsed_date = self._parse_date_string(date)
                 return {
                     'title': title,
                     'date': date,
+                    'parsed_date': parsed_date,
                     'case_number': case_number,
                     'pdf_url': pdf_url,
                     'raw_text': raw_text,
@@ -153,10 +177,12 @@ class DelhiHighCourtScraper:
 
             title = text[:250]
             raw_text = f"{title} judgment order"
+            parsed_date = self._parse_date_string(date)
 
             return {
                 'title': title,
                 'date': date,
+                'parsed_date': parsed_date,
                 'case_number': case_number,
                 'pdf_url': pdf_url,
                 'raw_text': raw_text,
@@ -168,16 +194,30 @@ class DelhiHighCourtScraper:
             return None
 
     def filter_judgments(self, judgments: List[Dict],
-                        income_tax_keywords: List[str],
-                        final_judgment_keywords: List[str],
-                        exclude_keywords: List[str]) -> List[Dict]:
+                         income_tax_keywords: List[str],
+                         final_judgment_keywords: List[str],
+                         exclude_keywords: List[str],
+                         max_days_old: Optional[int] = None) -> List[Dict]:
         """
         Filter judgments for final income tax judgments.
+        If max_days_old is provided, filters for judgments within that many days.
         Returns a list of judgments that match the criteria.
         """
         filtered = []
 
+        # Calculate cutoff date if max_days_old is provided
+        cutoff_date = None
+        if max_days_old is not None and max_days_old > 0:
+            now_ist = datetime.utcnow() + timedelta(hours=5, minutes=30)
+            cutoff_date = (now_ist - timedelta(days=max_days_old)).date()
+            logger.info(f"Filtering judgments on or after cutoff date: {cutoff_date} (max {max_days_old} days old)")
+
         for judgment in judgments:
+            # Check date freshness
+            if cutoff_date and judgment.get('parsed_date'):
+                if judgment['parsed_date'] < cutoff_date:
+                    continue
+
             # Combine text fields for searching
             search_text = f"{judgment['title']} {judgment.get('case_number', '')} {judgment.get('date', '')} {judgment.get('raw_text', '')}".lower()
 

@@ -187,7 +187,7 @@ def get_additional_keywords() -> List[str]:
 
     return income_tax_ext, final_ext
 
-def run_scraper(force: bool = False) -> dict:
+def run_scraper(force: bool = False, sync_only: bool = False) -> dict:
     """
     Execute the scraping and notification pipeline.
     Returns a dictionary summarizing execution results.
@@ -218,6 +218,16 @@ def run_scraper(force: bool = False) -> dict:
     listing_url = get_listing_url()
     additional_income_tax_keywords, additional_final_keywords = get_additional_keywords()
 
+    # Determine max days old for date filtering
+    max_days_env = os.getenv('MAX_DAYS_OLD')
+    if max_days_env is not None and max_days_env.strip() != "":
+        max_days_old = int(max_days_env) if max_days_env.isdigit() else None
+    else:
+        # Default: 3 days on Sat-Mon to cover Friday's orders, 2 days on Tue-Fri
+        now_utc = datetime.utcnow()
+        now_ist = now_utc + IST_OFFSET
+        max_days_old = 3 if now_ist.weekday() in (0, 5, 6) else 2
+
     # Combine default and additional keywords
     income_tax_keywords = DEFAULT_INCOME_TAX_KEYWORDS + additional_income_tax_keywords
     final_judgment_keywords = DEFAULT_FINAL_JUDGMENT_KEYWORDS + additional_final_keywords
@@ -226,10 +236,11 @@ def run_scraper(force: bool = False) -> dict:
     logger.info(f"Using {len(income_tax_keywords)} income tax keywords")
     logger.info(f"Using {len(final_judgment_keywords)} final judgment keywords")
     logger.info(f"Using {len(exclude_keywords)} exclusion keywords")
+    logger.info(f"Max judgment age filter: {max_days_old} days" if max_days_old else "Age filter disabled")
 
     # Load sent judgments
     sent_count_before = storage.get_sent_count()
-    logger.info(f"Loaded {sent_count_before} previously sent judgment IDs")
+    logger.info(f"Loaded {sent_count_before} previously sent judgment IDs from storage")
 
     # Fetch judgments from the website
     judgments = scraper.fetch_judgments_listing(listing_url)
@@ -244,12 +255,13 @@ def run_scraper(force: bool = False) -> dict:
 
     logger.info(f"Fetched {len(judgments)} total judgments from website")
 
-    # Filter for income tax final judgments
+    # Filter for income tax final judgments (with date age cutoff)
     filtered_judgments = scraper.filter_judgments(
         judgments,
         income_tax_keywords,
         final_judgment_keywords,
-        exclude_keywords
+        exclude_keywords,
+        max_days_old=max_days_old
     )
     logger.info(f"Filtered to {len(filtered_judgments)} income tax final judgments")
 
@@ -261,6 +273,18 @@ def run_scraper(force: bool = False) -> dict:
             new_judgments.append((judgment, judgment_id))
 
     logger.info(f"Found {len(new_judgments)} new judgments to process")
+
+    # If in sync_only mode, mark all current judgments as seen without sending
+    if sync_only or os.getenv('SYNC_ONLY', '').lower() in ('1', 'true', 'yes') or '--sync-only' in sys.argv:
+        new_ids = [j_id for _, j_id in new_judgments]
+        storage.mark_all_seen(new_ids)
+        logger.info(f"Marked {len(new_ids)} current judgments as seen without sending notifications.")
+        return {
+            "status": "success",
+            "message": f"Marked {len(new_ids)} judgments as seen. Future runs will only notify about new ones.",
+            "synced_count": len(new_ids),
+            "total_seen": storage.get_sent_count()
+        }
 
     # Send notifications and update storage
     sent_count = 0
@@ -275,8 +299,6 @@ def run_scraper(force: bool = False) -> dict:
         except Exception as e:
             logger.error(f"Error processing judgment {judgment_id}: {e}")
 
-    # Save storage
-    storage._save_sent_judgments()
     sent_count_after = storage.get_sent_count()
     logger.info(f"Saved storage. Sent judgments count: {sent_count_before} -> {sent_count_after}")
 
@@ -292,7 +314,8 @@ def run_scraper(force: bool = False) -> dict:
 def main():
     """Main execution function for CLI"""
     force = '--force' in sys.argv
-    result = run_scraper(force=force)
+    sync_only = '--sync-only' in sys.argv
+    result = run_scraper(force=force, sync_only=sync_only)
     return 0 if result.get("status") in ("success", "skipped") else 1
 
 if __name__ == "__main__":

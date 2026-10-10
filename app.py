@@ -50,6 +50,9 @@ HTML_TEMPLATE = """
         <form action="/run" method="post" style="display:inline;">
             <button type="submit" class="btn">Trigger Scraper Now</button>
         </form>
+        <form action="/sync-seen" method="post" style="display:inline;">
+            <button type="submit" class="btn" style="background:#8b5cf6; margin-left:0.5rem;" title="Mark all current court judgments as already seen so only future judgments are sent">Mark Current As Seen</button>
+        </form>
         <a href="/test-telegram" class="btn" style="background:#10b981; margin-left:0.5rem;">Test Telegram Bot</a>
         <a href="/logs" class="btn" style="background:#475569; margin-left:0.5rem;">View Raw Logs</a>
         
@@ -118,6 +121,12 @@ def test_telegram():
     notifier = TelegramNotifier()
     result = notifier.send_test_message()
     return jsonify(result), 200 if result.get("ok") else 400
+
+@app.route("/sync-seen", methods=["GET", "POST"])
+def sync_seen():
+    """Mark all current judgments as seen so future runs only send new judgments"""
+    result = run_scraper(force=True, sync_only=True)
+    return jsonify(result), 200
 
 @app.route("/logs", methods=["GET"])
 def logs():
