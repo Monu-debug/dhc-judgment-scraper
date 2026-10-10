@@ -13,8 +13,10 @@ class TelegramNotifier:
         - TELEGRAM_BOT_TOKEN
         - TELEGRAM_CHAT_ID
         """
-        self.bot_token = bot_token or os.getenv('TELEGRAM_BOT_TOKEN')
-        self.chat_id = chat_id or os.getenv('TELEGRAM_CHAT_ID')
+        raw_token = bot_token or os.getenv('TELEGRAM_BOT_TOKEN', '')
+        raw_chat = chat_id or os.getenv('TELEGRAM_CHAT_ID', '')
+        self.bot_token = raw_token.strip().strip('"').strip("'")
+        self.chat_id = raw_chat.strip().strip('"').strip("'")
         self.is_configured = False
 
         if not self.bot_token or not self.chat_id:
@@ -115,26 +117,27 @@ class TelegramNotifier:
 
         return message
 
-    def send_test_message(self) -> bool:
+    def send_test_message(self) -> dict:
         """Send a test message to verify the bot is working"""
         if not self.is_configured:
-            logger.warning("Telegram bot not configured for test message")
-            return False
+            return {"ok": False, "error": "Telegram credentials not set or bot failed to initialize"}
 
         try:
             url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
             payload = {
                 "chat_id": self.chat_id,
-                "text": "<b>Test message from Delhi High Court Judgment Scraper</b>\n\nIf you see this, the bot is configured correctly!",
+                "text": "<b>Test message from Delhi High Court Judgment Scraper</b>\n\nIf you see this, your Telegram bot is configured correctly!",
                 "parse_mode": "HTML"
             }
             res = requests.post(url, json=payload, timeout=15)
-            if res.status_code == 200 and res.json().get('ok'):
+            data = res.json() if res.content else {}
+            if res.status_code == 200 and data.get('ok'):
                 logger.info("Test message sent successfully")
-                return True
+                return {"ok": True, "message": "Test message sent successfully!"}
             else:
-                logger.error(f"Failed to send test message: {res.text}")
-                return False
+                desc = data.get("description", res.text)
+                logger.error(f"Failed to send test message: {desc}")
+                return {"ok": False, "error": desc}
         except Exception as e:
             logger.error(f"Failed to send test message: {e}")
-            return False
+            return {"ok": False, "error": str(e)}

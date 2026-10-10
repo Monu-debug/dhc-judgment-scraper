@@ -12,6 +12,7 @@ from flask import Flask, jsonify, request, render_template_string
 
 # Import scraping logic
 from main import run_scraper, IST_OFFSET, RUN_START_TIME, RUN_END_TIME
+from notifier import TelegramNotifier
 
 app = Flask(__name__)
 logger = logging.getLogger("app")
@@ -49,6 +50,7 @@ HTML_TEMPLATE = """
         <form action="/run" method="post" style="display:inline;">
             <button type="submit" class="btn">Trigger Scraper Now</button>
         </form>
+        <a href="/test-telegram" class="btn" style="background:#10b981; margin-left:0.5rem;">Test Telegram Bot</a>
         <a href="/logs" class="btn" style="background:#475569; margin-left:0.5rem;">View Raw Logs</a>
         
         <h3>Recent Logs</h3>
@@ -109,6 +111,13 @@ def trigger_run():
     force = request.args.get("force", "true").lower() in ("1", "true", "yes")
     result = run_scraper(force=force)
     return jsonify(result), 200
+
+@app.route("/test-telegram", methods=["GET", "POST"])
+def test_telegram():
+    """Test endpoint to verify Telegram credentials and deliver a test message"""
+    notifier = TelegramNotifier()
+    result = notifier.send_test_message()
+    return jsonify(result), 200 if result.get("ok") else 400
 
 @app.route("/logs", methods=["GET"])
 def logs():
