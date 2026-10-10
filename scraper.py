@@ -211,11 +211,11 @@ class DelhiHighCourtScraper:
            or Case Type is ITA / ITR.
         2. OR either party is 'Union of India' (or UOI) AND mentions 'Income Tax'.
         """
-        title = judgment.get('title', '')
-        petitioner = judgment.get('petitioner', '')
-        respondent = judgment.get('respondent', '')
-        case_number = judgment.get('case_number', '')
-        raw_text = judgment.get('raw_text', '')
+        title = (judgment.get('title') or '').strip()
+        petitioner = (judgment.get('petitioner') or '').strip()
+        respondent = (judgment.get('respondent') or '').strip()
+        case_number = (judgment.get('case_number') or '').strip()
+        raw_text = (judgment.get('raw_text') or '').strip()
 
         # Focus party text on who is involved
         party_text = f"{title} {petitioner} {respondent}".lower()
@@ -253,7 +253,7 @@ class DelhiHighCourtScraper:
             return True
 
         # Rule 1C: Direct Income Tax case type in case number (ITA = Income Tax Appeal, ITR = Income Tax Reference)
-        if re.search(r'\b(ita|itr)\b', case_number, re.IGNORECASE):
+        if case_number and re.search(r'\b(ita|itr)\b', case_number, re.IGNORECASE):
             return True
 
         # Rule 2: "Union of India" (or UOI) present AND case explicitly mentions Income Tax
@@ -299,14 +299,14 @@ class DelhiHighCourtScraper:
 
             # 3. Final judgment keywords check
             if final_judgment_keywords:
-                search_text = f"{judgment.get('title', '')} {judgment.get('raw_text', '')}".lower()
+                search_text = f"{judgment.get('title') or ''} {judgment.get('raw_text') or ''}".lower()
                 final_match = any(kw.lower() in search_text for kw in final_judgment_keywords)
                 if not final_match:
                     continue
 
             # 4. Exclusion check (interim/stay)
             if exclude_keywords:
-                search_text = f"{judgment.get('title', '')} {judgment.get('raw_text', '')}".lower()
+                search_text = f"{judgment.get('title') or ''} {judgment.get('raw_text') or ''}".lower()
                 if any(re.search(r'\b' + re.escape(ex.lower()) + r'\b', search_text) for ex in exclude_keywords):
                     continue
 
@@ -319,8 +319,8 @@ class DelhiHighCourtScraper:
         Generate a unique identifier for a judgment.
         Uses case number and date if available, otherwise falls back to a hash of the title.
         """
-        case_number = judgment.get('case_number', '')
-        date = judgment.get('date', '')
+        case_number = (judgment.get('case_number') or '').strip()
+        date = (judgment.get('date') or '').strip()
 
         if case_number and date:
             # Create a clean ID: remove special characters and spaces
@@ -329,4 +329,4 @@ class DelhiHighCourtScraper:
             return f"{clean_case}_{clean_date}"
         else:
             # Fallback to hash of title
-            return str(hash(judgment.get('title', '')))
+            return str(hash(judgment.get('title') or ''))
