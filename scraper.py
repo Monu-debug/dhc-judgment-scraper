@@ -122,6 +122,8 @@ class DelhiHighCourtScraper:
                 parsed_date = self._parse_date_string(date)
                 return {
                     'title': title,
+                    'petitioner': petitioner,
+                    'respondent': respondent,
                     'date': date,
                     'parsed_date': parsed_date,
                     'case_number': case_number,
@@ -179,8 +181,15 @@ class DelhiHighCourtScraper:
             raw_text = f"{title} judgment order"
             parsed_date = self._parse_date_string(date)
 
+            # Try to extract petitioner and respondent if "Vs" or "v." is in title
+            parts = re.split(r'\s+(?:Vs|v\.|versus)\s+', title, flags=re.IGNORECASE)
+            petitioner = parts[0].strip() if len(parts) > 1 else ""
+            respondent = parts[1].strip() if len(parts) > 1 else ""
+
             return {
                 'title': title,
+                'petitioner': petitioner,
+                'respondent': respondent,
                 'date': date,
                 'parsed_date': parsed_date,
                 'case_number': case_number,
@@ -193,15 +202,81 @@ class DelhiHighCourtScraper:
             logger.debug(f"Error parsing judgment element: {e}")
             return None
 
+    def is_income_tax_judgment(self, judgment: Dict, additional_keywords: List[str] = None) -> bool:
+        """
+        Filters judgment according to user specifications:
+        1. Title/parties contains an Income Tax authority:
+           ACIT, DCIT, PCIT, AO, ITO, CIT, CCIT, PCCIT, DGIT, DIT, ADIT, DDIT,
+           Commissioner of Income Tax, Income Tax Officer, Assessing Officer, etc.
+           or Case Type is ITA / ITR.
+        2. OR either party is 'Union of India' (or UOI) AND mentions 'Income Tax'.
+        """
+        title = judgment.get('title', '')
+        petitioner = judgment.get('petitioner', '')
+        respondent = judgment.get('respondent', '')
+        case_number = judgment.get('case_number', '')
+        raw_text = judgment.get('raw_text', '')
+
+        # Focus party text on who is involved
+        party_text = f"{title} {petitioner} {respondent}".lower()
+        full_text = f"{party_text} {case_number} {raw_text}".lower()
+
+        # Rule 1A: Specific authority phrases in party names
+        authority_phrases = [
+            "commissioner of income tax",
+            "commissioner of income-tax",
+            "income tax commissioner",
+            "income-tax commissioner",
+            "assessing officer",
+            "income tax officer",
+            "income-tax officer",
+            "income tax department",
+            "income-tax department",
+            "income tax appellate tribunal",
+            "central board of direct taxes",
+            "director general of income tax",
+            "principal commissioner of income tax",
+            "chief commissioner of income tax",
+            "pr. cit",
+            "pr.cit"
+        ]
+        if any(phrase in party_text for phrase in authority_phrases):
+            return True
+
+        # Rule 1B: Authority acronyms with word boundaries in party names (e.g. ACIT, DCIT, PCIT, AO, ITO, CIT)
+        authority_acronyms_pattern = (
+            r'\b(acit|dcit|pcit|cit|ccit|pccit|p\.c\.i\.t\.|c\.i\.t\.|'
+            r'ao|a\.o\.|ito|i\.t\.o\.|dgit|dit|adit|ddit|'
+            r'itat|cbdt)\b'
+        )
+        if re.search(authority_acronyms_pattern, party_text, re.IGNORECASE):
+            return True
+
+        # Rule 1C: Direct Income Tax case type in case number (ITA = Income Tax Appeal, ITR = Income Tax Reference)
+        if re.search(r'\b(ita|itr)\b', case_number, re.IGNORECASE):
+            return True
+
+        # Rule 2: "Union of India" (or UOI) present AND case explicitly mentions Income Tax
+        has_uoi = bool(re.search(r'\b(union of india|uoi|u\.o\.i\.)\b', party_text, re.IGNORECASE))
+        has_income_tax = bool(re.search(r'\b(income\s*-?\s*tax|direct\s*tax|itat|cbdt)\b', full_text, re.IGNORECASE))
+        if has_uoi and has_income_tax:
+            return True
+
+        # Rule 3: Any additional user-defined keywords from environment variables
+        if additional_keywords:
+            for kw in additional_keywords:
+                if kw and kw.strip() and kw.lower() in full_text:
+                    return True
+
+        return False
+
     def filter_judgments(self, judgments: List[Dict],
-                         income_tax_keywords: List[str],
-                         final_judgment_keywords: List[str],
-                         exclude_keywords: List[str],
+                         income_tax_keywords: List[str] = None,
+                         final_judgment_keywords: List[str] = None,
+                         exclude_keywords: List[str] = None,
                          max_days_old: Optional[int] = None) -> List[Dict]:
         """
-        Filter judgments for final income tax judgments.
-        If max_days_old is provided, filters for judgments within that many days.
-        Returns a list of judgments that match the criteria.
+        Filter judgments for final income tax judgments matching user requirements.
         """
         filtered = []
 
@@ -213,28 +288,27 @@ class DelhiHighCourtScraper:
             logger.info(f"Filtering judgments on or after cutoff date: {cutoff_date} (max {max_days_old} days old)")
 
         for judgment in judgments:
-            # Check date freshness
+            # 1. Date Freshness
             if cutoff_date and judgment.get('parsed_date'):
                 if judgment['parsed_date'] < cutoff_date:
                     continue
 
-            # Combine text fields for searching
-            search_text = f"{judgment['title']} {judgment.get('case_number', '')} {judgment.get('date', '')} {judgment.get('raw_text', '')}".lower()
-
-            # Check for income tax keywords
-            income_tax_match = any(keyword.lower() in search_text for keyword in income_tax_keywords)
-            if not income_tax_match:
+            # 2. Income Tax Requirement (Authority in party OR Union of India + Income Tax)
+            if not self.is_income_tax_judgment(judgment, additional_keywords=income_tax_keywords):
                 continue
 
-            # Check for final judgment keywords
-            final_judgment_match = any(keyword.lower() in search_text for keyword in final_judgment_keywords)
-            if not final_judgment_match:
-                continue
+            # 3. Final judgment keywords check
+            if final_judgment_keywords:
+                search_text = f"{judgment.get('title', '')} {judgment.get('raw_text', '')}".lower()
+                final_match = any(kw.lower() in search_text for kw in final_judgment_keywords)
+                if not final_match:
+                    continue
 
-            # Check for exclusion keywords (interim/procedural)
-            exclude_match = any(keyword.lower() in search_text for keyword in exclude_keywords)
-            if exclude_match:
-                continue
+            # 4. Exclusion check (interim/stay)
+            if exclude_keywords:
+                search_text = f"{judgment.get('title', '')} {judgment.get('raw_text', '')}".lower()
+                if any(re.search(r'\b' + re.escape(ex.lower()) + r'\b', search_text) for ex in exclude_keywords):
+                    continue
 
             filtered.append(judgment)
 
