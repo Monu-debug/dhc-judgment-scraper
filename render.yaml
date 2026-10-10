@@ -1,0 +1,34 @@
+services:
+  # Deployment Mode 1: Render Web Service (Free Tier Compatible)
+  # You can trigger the /run endpoint daily at 4:00 PM IST via cron-job.org or UptimeRobot
+  - type: web
+    name: dhc-judgment-scraper
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: FORCE_RUN
+        value: "true"
+      - key: CRON_SECRET
+        generateValue: true
+
+  # Deployment Mode 2: Native Render Cron Job (Requires Render Paid Starter plan)
+  # Uncomment if using Render's paid cron job feature:
+  # - type: cron
+  #   name: dhc-scraper-cron
+  #   runtime: python
+  #   schedule: "30 10 * * *"   # Runs daily at 10:30 UTC (4:00 PM IST)
+  #   buildCommand: pip install -r requirements.txt
+  #   startCommand: python main.py --force
+  #   plan: starter
+  #   envVars:
+  #     - key: TELEGRAM_BOT_TOKEN
+  #       sync: false
+  #     - key: TELEGRAM_CHAT_ID
+  #       sync: false
